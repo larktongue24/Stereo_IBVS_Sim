@@ -243,10 +243,10 @@ class StereoIBVSController:
         T_target_cam_in_base = T_base_to_cam @ T_inc_cam
         T_target_tool_in_base = T_target_cam_in_base @ T_cam_to_tool
 
-        # if self.initial_tool_pose_matrix_ is not None:
-        #     T_target_tool_in_base[:3, :3] = self.initial_tool_pose_matrix_[:3, :3]
-        # else:
-        #     rospy.logwarn_throttle(1.0, "Initial orientation not set, pose may drift!")
+        if self.initial_tool_pose_matrix_ is not None:
+            T_target_tool_in_base[:3, :3] = self.initial_tool_pose_matrix_[:3, :3]
+        else:
+            rospy.logwarn_throttle(1.0, "Initial orientation not set, pose may drift!")
 
         self.solve_and_execute_ik(T_target_tool_in_base)
 
