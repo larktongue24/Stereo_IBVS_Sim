@@ -31,21 +31,16 @@ class StereoVisionProcessor:
 
         self.T_wrist3_tcp = np.array([
             [1, 0, 0, 0],
-            [0, 1, 0, 0.05], 
-            [0, 0, 1, 0.3],
+            [0, 1, 0, 0.4], 
+            [0, 0, 1, 0],
             [0, 0, 0, 1]
         ])
-
-        # self.T_wrist3_camL = self.create_transform_matrix(pos=[-0.02, 0.05, 0], euler_rad=[1.5708, 0, -0.2618])
-        # self.T_wrist3_camR = self.create_transform_matrix(pos=[0.02, 0.05, 0], euler_rad=[1.5708, 0, 0.2618])
-        # self.T_camL_wrist3 = np.linalg.inv(self.T_wrist3_camL)
-        # self.T_camR_wrist3 = np.linalg.inv(self.T_wrist3_camR)
 
         self.T_wrist3_camL = None
         self.T_wrist3_camR = None
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
-        wrist_frame = "wrist_3_link"
+        wrist_frame = "wrist_3_link_gt"
         left_cam_frame = "left_camera_frame"
         right_cam_frame = "right_camera_frame"
         rospy.loginfo("Attempting to get camera extrinsics from TF tree...")
@@ -60,16 +55,18 @@ class StereoVisionProcessor:
             self.T_camR_wrist3 = self.transform_to_matrix(trans_R)
             rospy.loginfo("Successfully received T_wrist3_camR from TF.")
 
-            trans = self.tf_buffer.lookup_transform('tool0', 'wrist_3_link', rospy.Time(0))
-        
-            translation = trans.transform.translation
-            rotation_q = trans.transform.rotation
+            self.tf_buffer.can_transform("base_link", left_cam_frame, rospy.Time(0), rospy.Duration(5.0))
+            trans = self.tf_buffer.lookup_transform("base_link", left_cam_frame, rospy.Time(0), rospy.Duration(1.0))
+  
+            # translation = trans.transform.translation
+            # rotation_q = trans.transform.rotation
             
-            euler = euler_from_quaternion([rotation_q.x, rotation_q.y, rotation_q.z, rotation_q.w])
-            
-            rospy.loginfo("--- Transform tool0 -> wrist_3_link ---")
-            rospy.loginfo(f"Translation (x,y,z) [m]: {translation.x:.5f}, {translation.y:.5f}, {translation.z:.5f}")
-            rospy.loginfo(f"Rotation (r,p,y) [rad]: {euler[0]:.5f}, {euler[1]:.5f}, {euler[2]:.5f}")
+            # euler = euler_from_quaternion([rotation_q.x, rotation_q.y, rotation_q.z, rotation_q.w])
+
+            # rospy.loginfo("--- Transform tool0 -> left_camera_frame ---")
+            # rospy.loginfo(f"Translation (x,y,z) [m]: {translation.x:.5f}, {translation.y:.5f}, {translation.z:.5f}")
+            # rospy.loginfo(f"Rotation (r,p,y) [rad]: {euler[0]:.5f}, {euler[1]:.5f}, {euler[2]:.5f}")
+
 
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
             rospy.logerr(f"CRITICAL TF ERROR during initialization: {e}")
@@ -119,34 +116,7 @@ class StereoVisionProcessor:
         pixel_y = p_proj[1] / p_proj[2]
         
         return (int(pixel_x), int(pixel_y))
-
-    # def project_point_to_pixel(self, T_cam_point, K):
-    #     """
-    #     Projects a 3D point in the camera frame to a 2D pixel coordinate.
-    #     This version correctly handles the Z-axis-backward camera convention.
-    #     """
-    #     P_cam = T_cam_point[:3, 3]  # P_cam = [X, Y, Z]
-
-    #     # Check if the point is in front of the camera (where Z is negative)
-    #     # Use a small epsilon for floating point safety
-    #     if P_cam[2] >= -1e-6:
-    #         return None
-        
-    #     # Extract intrinsic parameters from the K matrix
-    #     fx = K[0, 0]
-    #     fy = K[1, 1]
-    #     cx = K[0, 2]
-    #     cy = K[1, 2]
-
-    #     # Correct projection formula for a Z-backward camera system
-    #     # The depth 'd' is positive, so we use -P_cam[2]
-    #     d = -P_cam[2]
-    #     pixel_x = fx * (P_cam[0] / d) + cx
-    #     pixel_y = fy * (P_cam[1] / d) + cy
-        
-    #     return (int(pixel_x), int(pixel_y))
     
-
     def left_cam_info_callback(self, msg):
         if not self.left_cam_info_received:
             self.left_camera_matrix = np.array(msg.K).reshape(3, 3)
@@ -239,6 +209,74 @@ class StereoVisionProcessor:
         if tcp_pixel:
             cv2.drawMarker(image, tcp_pixel, (0, 0, 255), 
                         markerType=cv2.MARKER_TILTED_CROSS, markerSize=20, thickness=2)
+            
+
+    def verify_projection_model(self, s1_actual_left, s2_actual_left, T_base_camL_1):
+
+        rospy.loginfo("==========================================================")
+        rospy.loginfo("=== Starting Projection Model Verification Test (v2) ===")
+        rospy.loginfo("==========================================================")
+
+
+        s1_actual = np.array(s1_actual_left)
+        s2_actual = np.array(s2_actual_left)
+        delta_p_world = np.array([0.1, 0.0, 0.0])
+        P1_world_h = np.array([0.45, 0.05, 0.2, 1.0])
+
+        R_base_world = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]])
+        T_base_world = np.eye(4)
+        T_base_world[:3, :3] = R_base_world
+        
+        if self.left_camera_matrix is None:
+            rospy.logerr("Cannot run verification: Left camera intrinsics not available.")
+            return
+        K_left = self.left_camera_matrix
+
+        rospy.loginfo("--- Input Data ---")
+        rospy.loginfo(f"Observed Initial Pixels: {s1_actual}")
+        rospy.loginfo(f"Observed Final Pixels:   {s2_actual}\n")
+
+        P1_base_h = T_base_world @ P1_world_h
+        T_camL_base_1 = np.linalg.inv(T_base_camL_1)
+        P1_camL_h = T_camL_base_1 @ P1_base_h
+        
+        T_dummy_P1 = np.eye(4)
+        T_dummy_P1[:3, 3] = P1_camL_h[:3]
+        s1_predicted = self.project_point_to_pixel(T_dummy_P1, K_left)
+        
+        rospy.loginfo("--- Initial State Sanity Check ---")
+        if s1_predicted is not None:
+            rospy.loginfo(f"Model's Predicted Initial Pixels: ({s1_predicted[0]:.2f}, {s1_predicted[1]:.2f})")
+            rospy.loginfo(f"Initial Error (Observed - Predicted): {np.array(s1_predicted) - s1_actual}\n")
+        else:
+            rospy.logwarn("Initial point is not projectable by the model.\n")
+
+        P2_world_h = P1_world_h + np.append(delta_p_world, 0)
+        P2_base_h = T_base_world @ P2_world_h
+        P2_camL_predicted_h = T_camL_base_1 @ P2_base_h
+
+        T_dummy_P2 = np.eye(4)
+        T_dummy_P2[:3, 3] = P2_camL_predicted_h[:3]
+        s2_predicted = self.project_point_to_pixel(T_dummy_P2, K_left)
+
+        rospy.loginfo("--- Final Result Comparison ---")
+        if s2_predicted is not None:
+            s2_predicted_np = np.array(s2_predicted)
+            rospy.loginfo(f"ACTUAL Observed Final Pixels:  ({s2_actual[0]:.2f}, {s2_actual[1]:.2f})")
+            rospy.loginfo(f"MODEL Predicted Final Pixels:  ({s2_predicted_np[0]:.2f}, {s2_predicted_np[1]:.2f})")
+
+            pixel_error_vec = s2_actual - s2_predicted_np
+            pixel_error_dist = np.linalg.norm(pixel_error_vec)
+
+            rospy.loginfo("\n--- CONCLUSION ---")
+            rospy.loginfo(f"Pixel Prediction Error Vector (Actual - Predicted): ({pixel_error_vec[0]:.2f}, {pixel_error_vec[1]:.2f})")
+            rospy.loginfo(f"Pixel Prediction Error Distance: {pixel_error_dist:.2f} pixels")
+            rospy.loginfo("==========================================================")
+        else:
+            rospy.logwarn("Final point is not projectable by the model.")
+            rospy.loginfo("==========================================================")
+
+
 
 
 if __name__ == '__main__':
@@ -249,3 +287,41 @@ if __name__ == '__main__':
         pass
     finally:
         cv2.destroyAllWindows()
+
+# if __name__ == '__main__':
+#     processor = StereoVisionProcessor()
+#     rospy.loginfo("Waiting for model data to be populated...")
+#     while not processor.left_cam_info_received:
+#         rospy.sleep(0.1)
+#     rospy.loginfo("Model data is ready.")
+    
+#     try:
+
+#         rospy.loginfo("Capturing initial camera pose from TF...")
+        
+
+#         trans = processor.tf_buffer.lookup_transform(
+#             "base_link", 
+#             "left_camera_frame", 
+#             rospy.Time(0), 
+#             rospy.Duration(1.0)
+#         )
+
+#         initial_cam_pose_matrix = processor.transform_to_matrix(trans)
+        
+#         rospy.loginfo("Successfully captured initial camera pose matrix.")
+#         rospy.loginfo("Please move the Aruco marker now and prepare the observed pixel values.")
+        
+
+#         rospy.sleep(1.0) 
+
+#         s1_observed = (219, 379)  
+#         s2_observed = (212, 288)  
+
+
+#         processor.verify_projection_model(s1_observed, s2_observed, initial_cam_pose_matrix)
+
+#     except rospy.ROSInterruptException:
+#         pass
+#     except Exception as e:
+#         rospy.logerr(f"An error occurred during verification test: {e}")

@@ -6,6 +6,7 @@
 #include <mujoco/mujoco.h>
 #include <std_msgs/Float32MultiArray.h>
 #include <geometry_msgs/PointStamped.h>
+#include <geometry_msgs/PoseStamped.h>
 
 namespace ibvs_ur5_sim
 {
@@ -37,5 +38,8 @@ private:
     mjtNum corner_local_pos_[4][3];
 
     ros::Publisher corner_world_pub_;
+
+    ros::Publisher wrist_pose_pub_;
+    int wrist_body_id_;
 };
 } // namespace ibvs_ur5_sim

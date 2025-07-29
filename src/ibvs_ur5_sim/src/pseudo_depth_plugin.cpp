@@ -53,6 +53,16 @@ bool StereoPseudoDepthPlugin::load(const mjModel *m, mjData *d)
 
     corner_world_pub_ = nh_.advertise<geometry_msgs::PointStamped>("/aruco_corner_world_position", 1);
 
+    const char* wrist_name = "wrist_3_link";
+    wrist_body_id_ = mj_name2id(m_, mjOBJ_BODY, wrist_name);
+    if (wrist_body_id_ == -1) {
+        ROS_ERROR("StereoPseudoDepthPlugin: Could not find wrist_3_link body.");
+        return false;
+    }
+
+    wrist_pose_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/mujoco_ground_truth/wrist_3_pose", 1);
+
+
     return true;
 }
 
@@ -60,6 +70,28 @@ void StereoPseudoDepthPlugin::reset() {}
 
 void StereoPseudoDepthPlugin::controlCallback(const mjModel *m, mjData *d)
 {
+    if (wrist_body_id_ != -1) {
+        mjtNum* wrist_world_pos = d->xpos + wrist_body_id_ * 3;
+        mjtNum* wrist_world_mat = d->xmat + wrist_body_id_ * 9;
+
+        mjtNum wrist_world_quat[4];
+        mju_mat2Quat(wrist_world_quat, wrist_world_mat);
+
+        geometry_msgs::PoseStamped pose_msg;
+        pose_msg.header.stamp = ros::Time::now();
+        pose_msg.header.frame_id = "world"; 
+
+        pose_msg.pose.position.x = wrist_world_pos[0];
+        pose_msg.pose.position.y = wrist_world_pos[1];
+        pose_msg.pose.position.z = wrist_world_pos[2];
+
+        pose_msg.pose.orientation.w = wrist_world_quat[0]; 
+        pose_msg.pose.orientation.x = wrist_world_quat[1];
+        pose_msg.pose.orientation.y = wrist_world_quat[2];
+        pose_msg.pose.orientation.z = wrist_world_quat[3];
+
+        wrist_pose_pub_.publish(pose_msg);
+    }
 
     const double NOISE_STDDEV = 0.0000001; 
     static std::default_random_engine generator(std::random_device{}());

@@ -23,13 +23,16 @@ class StereoIBVSController:
         rospy.loginfo("Stereo IBVS Controller Node Started")
 
         self.lambda_ = 4.0  
-        self.dt_ = 0.01
+        self.dt_ = 0.02
         self.rate = rospy.Rate(1 / self.dt_)
-        self.error_threshold_ = 0.6
+        self.error_threshold_ = 0.5
 
         self.servoing_active = False
         self.is_ready_to_servo = False
         self.home_joint_positions = [0.073981, -1.7, -0.6, -2.2, 1.473974, 0.2]
+
+        self.convergence_counter_ = 0
+        self.required_convergence_steps_ = 3
 
         self.left_cam_matrix = None
         self.right_cam_matrix = None
@@ -168,8 +171,8 @@ class StereoIBVSController:
         # Z_l = left_depth_msg.data[0]
         # Z_r = right_depth_msg.data[0]
 
-        Z_l = 0.302655
-        Z_r = 0.302655
+        Z_l = 0.35
+        Z_r = 0.35
 
         # if Z_l < 0.01 or Z_r < 0.01:
         #     rospy.logwarn("Invalid depth value detected, skipping step.")
@@ -181,13 +184,32 @@ class StereoIBVSController:
         self.error_pub.publish(avg_pixel_error)
         rospy.loginfo(f"Average pixel error: {avg_pixel_error:.2f}")
 
+        # if avg_pixel_error < self.error_threshold_:
+        #     rospy.loginfo_once(f"Target reached! Final average pixel error: {avg_pixel_error:.2f}")
+        #     self.servoing_active = False 
+
+        #     self.verify_convergence_in_tool_frame()
+
+        #     return
+
+
         if avg_pixel_error < self.error_threshold_:
-            rospy.loginfo_once(f"Target reached! Final average pixel error: {avg_pixel_error:.2f}")
-            self.servoing_active = False 
+            # If the error is below the threshold, increment the counter.
+            self.convergence_counter_ += 1
+            rospy.loginfo(f"Convergence condition met ({self.convergence_counter_}/{self.required_convergence_steps_})...")
 
-            self.verify_convergence_in_tool_frame()
-
-            return
+            # Check if the condition has been met for the required number of consecutive steps.
+            if self.convergence_counter_ >= self.required_convergence_steps_:
+                rospy.loginfo(f"Target reached for {self.required_convergence_steps_} consecutive steps! Final avg pixel error: {avg_pixel_error:.2f}")
+                self.servoing_active = False  # Stop servoing
+                self.verify_convergence_in_tool_frame()
+                self.convergence_counter_ = 0 # Reset for the next run
+                return # Exit the callback to stop sending motion commands
+        else:
+            # If the error goes above the threshold, the streak is broken. Reset the counter.
+            if self.convergence_counter_ > 0:
+                rospy.logwarn(f"Convergence streak broken. Resetting counter from {self.convergence_counter_} to 0.")
+            self.convergence_counter_ = 0
         
         J_stereo = self.compute_stereo_image_jacobian(s_cur, Z_l, Z_r)
 
@@ -200,13 +222,13 @@ class StereoIBVSController:
         J_pseudo_inv = np.linalg.inv(JtJ + k * I) @ J_stereo.T
 
         if avg_pixel_error > 25:
-            self.lambda_ = 5
+            self.lambda_ = 4
         else:
             if avg_pixel_error > 10:
-                self.lambda_ = 10.0
+                self.lambda_ = 8.0
             else:
                 if avg_pixel_error > 5:
-                    self.lambda_ = 20.0
+                    self.lambda_ = 15.0
                 else:
                     if avg_pixel_error > 2:
                         self.lambda_ = 30.0
@@ -214,7 +236,7 @@ class StereoIBVSController:
                         if avg_pixel_error > 1:
                             self.lambda_ = 40.0
                         else:
-                            self.lambda_ = 50.0
+                            self.lambda_ = 15.0
 
         v_c_linear = -self.lambda_ * (J_pseudo_inv @ error)
 
@@ -390,13 +412,17 @@ class StereoIBVSController:
             rospy.loginfo(f"Calculated Aruco corner position in tool frame: {P_tool0_corner}")
 
             # 4. Compare with the known virtual TCP position
-            P_tool0_tcp = np.array([0, 0.05, 0.3])
-            P_tool0_tcp_homogeneous = np.append(P_tool0_tcp, 1)
-            P_base_tcp_homogeneous = T_base_tool0 @ P_tool0_tcp_homogeneous
+            P_wrist3_tcp = np.array([0, 0.4, 0])
+            P_wrist3_tcp_homogeneous = np.append(P_wrist3_tcp, 1)
+
+            trans_wrist3 = self.tf_buffer.lookup_transform(self.base_frame, "wrist_3_link_gt", rospy.Time(0), rospy.Duration(1.0))
+            T_base_wrist3 = self.transform_to_matrix(trans_wrist3)
+
+            P_base_tcp_homogeneous = T_base_wrist3 @ P_wrist3_tcp_homogeneous
             P_base_tcp = P_base_tcp_homogeneous[:3]
             rospy.loginfo(f"Target virtual TCP position in base frame:      {P_base_tcp}")
 
-            physical_error_m = np.linalg.norm(P_tool0_corner - P_tool0_tcp)
+            physical_error_m = np.linalg.norm(P_base_corner - P_base_tcp)
             
             rospy.loginfo("-------------------------------------------")
             rospy.loginfo(f"Final 3D Physical Error: {physical_error_m * 1000:.2f} mm")
