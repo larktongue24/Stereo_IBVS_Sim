@@ -10,7 +10,7 @@ from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Float32MultiArray
 from scipy.spatial.transform import Rotation
 import tf2_ros
-from tf.transformations import concatenate_matrices, translation_matrix, quaternion_matrix
+from tf.transformations import concatenate_matrices, translation_matrix, quaternion_matrix, euler_from_quaternion
 
 class StereoVisionProcessor:
     def __init__(self):
@@ -29,16 +29,18 @@ class StereoVisionProcessor:
         self.tcp_pixel_left = None
         self.tcp_pixel_right = None
 
-
         self.T_wrist3_tcp = np.array([
             [1, 0, 0, 0],
-            [0, 1, 0, 0.2], 
-            [0, 0, 1, 0],
+            [0, 1, 0, 0.05], 
+            [0, 0, 1, 0.3],
             [0, 0, 0, 1]
         ])
 
-        # self.T_wrist3_camL = self.create_transform_matrix(pos=[-0.02, 0.105, 0], euler_rad=[1.5708, 0, -0.2618])
-        # self.T_wrist3_camR = self.create_transform_matrix(pos=[0.02, 0.105, 0], euler_rad=[1.5708, 0, 0.2618])
+        # self.T_wrist3_camL = self.create_transform_matrix(pos=[-0.02, 0.05, 0], euler_rad=[1.5708, 0, -0.2618])
+        # self.T_wrist3_camR = self.create_transform_matrix(pos=[0.02, 0.05, 0], euler_rad=[1.5708, 0, 0.2618])
+        # self.T_camL_wrist3 = np.linalg.inv(self.T_wrist3_camL)
+        # self.T_camR_wrist3 = np.linalg.inv(self.T_wrist3_camR)
+
         self.T_wrist3_camL = None
         self.T_wrist3_camR = None
         self.tf_buffer = tf2_ros.Buffer()
@@ -48,7 +50,6 @@ class StereoVisionProcessor:
         right_cam_frame = "right_camera_frame"
         rospy.loginfo("Attempting to get camera extrinsics from TF tree...")
         try:
-
             self.tf_buffer.can_transform(left_cam_frame, wrist_frame, rospy.Time(0), rospy.Duration(5.0))
             trans_L = self.tf_buffer.lookup_transform(left_cam_frame, wrist_frame, rospy.Time(0), rospy.Duration(1.0))
             self.T_camL_wrist3 = self.transform_to_matrix(trans_L)
@@ -58,6 +59,17 @@ class StereoVisionProcessor:
             trans_R = self.tf_buffer.lookup_transform(right_cam_frame, wrist_frame, rospy.Time(0), rospy.Duration(1.0))
             self.T_camR_wrist3 = self.transform_to_matrix(trans_R)
             rospy.loginfo("Successfully received T_wrist3_camR from TF.")
+
+            trans = self.tf_buffer.lookup_transform('tool0', 'wrist_3_link', rospy.Time(0))
+        
+            translation = trans.transform.translation
+            rotation_q = trans.transform.rotation
+            
+            euler = euler_from_quaternion([rotation_q.x, rotation_q.y, rotation_q.z, rotation_q.w])
+            
+            rospy.loginfo("--- Transform tool0 -> wrist_3_link ---")
+            rospy.loginfo(f"Translation (x,y,z) [m]: {translation.x:.5f}, {translation.y:.5f}, {translation.z:.5f}")
+            rospy.loginfo(f"Rotation (r,p,y) [rad]: {euler[0]:.5f}, {euler[1]:.5f}, {euler[2]:.5f}")
 
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
             rospy.logerr(f"CRITICAL TF ERROR during initialization: {e}")
@@ -117,7 +129,7 @@ class StereoVisionProcessor:
 
     #     # Check if the point is in front of the camera (where Z is negative)
     #     # Use a small epsilon for floating point safety
-    #     if P_cam[2] <= 1e-6:
+    #     if P_cam[2] >= -1e-6:
     #         return None
         
     #     # Extract intrinsic parameters from the K matrix
@@ -128,7 +140,7 @@ class StereoVisionProcessor:
 
     #     # Correct projection formula for a Z-backward camera system
     #     # The depth 'd' is positive, so we use -P_cam[2]
-    #     d = P_cam[2]
+    #     d = -P_cam[2]
     #     pixel_x = fx * (P_cam[0] / d) + cx
     #     pixel_y = fy * (P_cam[1] / d) + cy
         

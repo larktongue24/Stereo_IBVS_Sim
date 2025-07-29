@@ -22,10 +22,10 @@ class StereoIBVSController:
         rospy.init_node('stereo_ibvs_control_node')
         rospy.loginfo("Stereo IBVS Controller Node Started")
 
-        self.lambda_ = 8.0  
+        self.lambda_ = 4.0  
         self.dt_ = 0.01
         self.rate = rospy.Rate(1 / self.dt_)
-        self.error_threshold_ = 1.0 
+        self.error_threshold_ = 0.6
 
         self.servoing_active = False
         self.is_ready_to_servo = False
@@ -84,6 +84,7 @@ class StereoIBVSController:
         self.start_service = rospy.Service('/ibvs/start_servoing', Trigger, self.handle_start_servoing)
 
         self.R_rl = self.get_stereo_rotation_matrix()
+        rospy.loginfo(f"--- R_rl Rotation Matrix ---\n{np.round(self.R_rl, 3)}")
         if self.R_rl is None:
             rospy.logerr("Could not get stereo rotation matrix. Shutting down.")
             rospy.signal_shutdown("TF Error")
@@ -164,8 +165,11 @@ class StereoIBVSController:
             return
 
         s_cur = np.array(corners_msg.data) 
-        Z_l = left_depth_msg.data[0]
-        Z_r = right_depth_msg.data[0]
+        # Z_l = left_depth_msg.data[0]
+        # Z_r = right_depth_msg.data[0]
+
+        Z_l = 0.302655
+        Z_r = 0.302655
 
         # if Z_l < 0.01 or Z_r < 0.01:
         #     rospy.logwarn("Invalid depth value detected, skipping step.")
@@ -199,9 +203,18 @@ class StereoIBVSController:
             self.lambda_ = 5
         else:
             if avg_pixel_error > 10:
-                self.lambda_ = 20.0
+                self.lambda_ = 10.0
             else:
-                self.lambda_ = 40.0
+                if avg_pixel_error > 5:
+                    self.lambda_ = 20.0
+                else:
+                    if avg_pixel_error > 2:
+                        self.lambda_ = 30.0
+                    else:
+                        if avg_pixel_error > 1:
+                            self.lambda_ = 40.0
+                        else:
+                            self.lambda_ = 50.0
 
         v_c_linear = -self.lambda_ * (J_pseudo_inv @ error)
 
@@ -230,10 +243,10 @@ class StereoIBVSController:
         T_target_cam_in_base = T_base_to_cam @ T_inc_cam
         T_target_tool_in_base = T_target_cam_in_base @ T_cam_to_tool
 
-        if self.initial_tool_pose_matrix_ is not None:
-            T_target_tool_in_base[:3, :3] = self.initial_tool_pose_matrix_[:3, :3]
-        else:
-            rospy.logwarn_throttle(1.0, "Initial orientation not set, pose may drift!")
+        # if self.initial_tool_pose_matrix_ is not None:
+        #     T_target_tool_in_base[:3, :3] = self.initial_tool_pose_matrix_[:3, :3]
+        # else:
+        #     rospy.logwarn_throttle(1.0, "Initial orientation not set, pose may drift!")
 
         self.solve_and_execute_ik(T_target_tool_in_base)
 
@@ -265,12 +278,12 @@ class StereoIBVSController:
         rospy.loginfo("Attempting to get transform from left_camera_frame to right_camera_frame (R_rl)...")
         while not rospy.is_shutdown():
             try:
-                self.tf_buffer.can_transform('right_camera_frame', 'left_camera_frame', rospy.Time(0), rospy.Duration(2.0))
+                self.tf_buffer.can_transform('right_camera_frame', 'left_camera_frame', rospy.Time(0.1), rospy.Duration(2.0))
 
                 transform_stamped = self.tf_buffer.lookup_transform(
                     'right_camera_frame',  # Target Frame
                     'left_camera_frame',   # Source Frame
-                    rospy.Time(0)
+                    rospy.Time(0.1)
                 )
                 
                 rospy.loginfo("Successfully received transform R_rl.")
@@ -353,7 +366,7 @@ class StereoIBVSController:
         rospy.loginfo("--- Starting Final Pose Verification in Tool Frame ---")
         try:
             # 1. Define the world coordinates of the tracked Aruco corner
-            P_world_corner = np.array([0.45, 0.05, 0.4])
+            P_world_corner = np.array([0.45, 0.05, 0.2])
             rospy.loginfo(f"Static world position of tracked Aruco corner: {P_world_corner}")
 
             # Define the rotation from world to base (180 deg around Z)
@@ -377,8 +390,11 @@ class StereoIBVSController:
             rospy.loginfo(f"Calculated Aruco corner position in tool frame: {P_tool0_corner}")
 
             # 4. Compare with the known virtual TCP position
-            P_tool0_tcp = np.array([0, 0.2, 0])
-            rospy.loginfo(f"Target virtual TCP position in tool frame:      {P_tool0_tcp}")
+            P_tool0_tcp = np.array([0, 0.05, 0.3])
+            P_tool0_tcp_homogeneous = np.append(P_tool0_tcp, 1)
+            P_base_tcp_homogeneous = T_base_tool0 @ P_tool0_tcp_homogeneous
+            P_base_tcp = P_base_tcp_homogeneous[:3]
+            rospy.loginfo(f"Target virtual TCP position in base frame:      {P_base_tcp}")
 
             physical_error_m = np.linalg.norm(P_tool0_corner - P_tool0_tcp)
             

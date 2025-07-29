@@ -51,6 +51,8 @@ bool StereoPseudoDepthPlugin::load(const mjModel *m, mjData *d)
     corner_local_pos_[2][0] =  half_size; corner_local_pos_[2][1] = -half_size; corner_local_pos_[2][2] = 0;
     corner_local_pos_[3][0] = -half_size; corner_local_pos_[3][1] = -half_size; corner_local_pos_[3][2] = 0;
 
+    corner_world_pub_ = nh_.advertise<geometry_msgs::PointStamped>("/aruco_corner_world_position", 1);
+
     return true;
 }
 
@@ -73,6 +75,14 @@ void StereoPseudoDepthPlugin::controlCallback(const mjModel *m, mjData *d)
     mjtNum rotated_corner[3];
     mju_rotVecMat(rotated_corner, corner_local_pos_[0], aruco_world_mat);
     mju_add(corner_world_pos, rotated_corner, aruco_world_pos, 3); 
+
+    geometry_msgs::PointStamped corner_msg;
+    corner_msg.header.stamp = ros::Time::now();
+    corner_msg.header.frame_id = "world"; // Or your MuJoCo world frame name
+    corner_msg.point.x = corner_world_pos[0];
+    corner_msg.point.y = corner_world_pos[1];
+    corner_msg.point.z = corner_world_pos[2];
+    corner_world_pub_.publish(corner_msg);
 
     mjtNum left_distance = mju_dist3(corner_world_pos, left_cam_world_pos);
     if (NOISE_STDDEV > 0.0) {

@@ -5,6 +5,7 @@
 #include <ros/ros.h>
 #include <mujoco/mujoco.h>
 #include <std_msgs/Float32MultiArray.h>
+#include <geometry_msgs/PointStamped.h>
 
 namespace ibvs_ur5_sim
 {
@@ -34,5 +35,7 @@ private:
     double aruco_size_; 
 
     mjtNum corner_local_pos_[4][3];
+
+    ros::Publisher corner_world_pub_;
 };
 } // namespace ibvs_ur5_sim
